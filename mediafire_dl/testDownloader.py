@@ -100,4 +100,10 @@ if __name__ == "__main__":
 
     time.sleep(3)
 
+
     id3 = manager.add_download("https://download1503.mediafire.com/xxxxxxxxxxxxxxxxxxxxxxx/yyyyyyyyyyyyyyy/zzzzzzz.zip")
+
+
+# +========+
+# + FAILED +
+# +========+
