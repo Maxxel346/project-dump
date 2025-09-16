@@ -24,8 +24,3 @@ That way:
 - Expect messy, incomplete, or experimental code  
 - Don’t expect full documentation or polished implementations  
 - Some parts may never be finished (and that’s okay)  
-
----
-
-## License
-[MIT](./LICENSE) – feel free to reuse anything useful.
