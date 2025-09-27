@@ -31,7 +31,7 @@ logging.basicConfig(
 # --- Constants ---
 TARGET_WS = "wss://pixeldrain.com/api/file_stats"
 CHROME_URL = "http://127.0.0.1:9222"
-PIXELDRAIN_URL = "https://pixeldrain.com/u/UaZMK2SQ"
+PIXELDRAIN_URL = "https://pixeldrain.com/u/xxxx"
 
 # --- State Variables ---
 ws_map: Dict[str, str] = {}
@@ -229,3 +229,4 @@ if __name__ == "__main__":
         if run_sniffer(browser=browser):
             break
         mainConnection()
+
