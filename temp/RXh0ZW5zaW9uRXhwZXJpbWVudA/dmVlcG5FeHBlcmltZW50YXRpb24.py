@@ -3,7 +3,7 @@ import random
 import logging
 import pychrome
 import pyautogui
-
+from bs4 import BeautifulSoup
 
 # Configure logging
 logging.basicConfig(
@@ -13,27 +13,18 @@ logging.basicConfig(
 
 
 def init_browser(debug_url: str = "http://127.0.0.1:9222", wait_time: int = 5) -> pychrome.Browser:
-    """
-    Initialize connection to Chrome remote debugging protocol.
-    """
     logging.info("Connecting to Chrome at %s", debug_url)
     browser = pychrome.Browser(url=debug_url)
-    time.sleep(wait_time)  # Give Chrome time to be ready
+    time.sleep(wait_time)
     return browser
 
 
 def open_extension_popup():
-    """
-    Trigger Chrome extension popup using hotkey (Ctrl+Shift+H).
-    """
     logging.info("Opening extension popup with hotkey...")
     pyautogui.hotkey("ctrl", "shift", "h")
 
 
 def find_extension_tab(browser: pychrome.Browser, extension_id: str) -> pychrome.Tab:
-    """
-    Scan open tabs to find the extension popup by its unique identifier.
-    """
     logging.info("Scanning tabs for extension id: %s", extension_id)
 
     for i, tab in enumerate(browser.list_tab()):
@@ -50,7 +41,6 @@ def find_extension_tab(browser: pychrome.Browser, extension_id: str) -> pychrome
 
             if extension_id in html:
                 logging.info("Found extension tab at index %d, id=%s, url=%s", i, tab.id, tab.url)
-                # 🔑 don't stop this tab — keep it alive for later use
                 return tab
 
         except Exception as e:
@@ -61,55 +51,103 @@ def find_extension_tab(browser: pychrome.Browser, extension_id: str) -> pychrome
     return None
 
 
-def click_connect_button(tab: pychrome.Tab):
+def get_connection_status(tab: pychrome.Tab) -> str:
     """
-    Click the connect button inside the extension popup.
+    Return 'connected' or 'disconnected' based on the button class.
     """
-    logging.info("Clicking connect button in extension tab...")
-    tab.start()
-    tab.Page.enable()
-
-    tab.call_method(
+    result = tab.call_method(
         "Runtime.evaluate",
         expression="""
-        var btn = document.querySelector('.connect-button');
-        if(btn) { btn.click(); } else { console.log('Button not found'); }
+        (function(){
+            var btn = document.querySelector('.connect-button');
+            if (!btn) return "unknown";
+            if (btn.classList.contains('connect-button--connected')) return "connected";
+            if (btn.classList.contains('connect-button--disconnected')) return "disconnected";
+            return "unknown";
+        })();
         """
     )
+    return result["result"]["value"]
 
 
-def save_tab_html(tab: pychrome.Tab, prefix: str = "extension_tab"):
+def wait_until_connected(tab: pychrome.Tab, timeout: int = 20, interval: float = 1.0) -> bool:
     """
-    Save the full HTML content of the tab for debugging.
+    Wait until the extension shows 'connected' state.
     """
-    html = tab.call_method(
-        "Runtime.evaluate",
-        expression="document.documentElement.outerHTML"
-    )["result"]["value"]
+    logging.info("Waiting for VPN to connect...")
+    start = time.time()
 
-    file_id = random.randint(1, 50)
-    filename = f"{prefix}_{file_id}.html"
+    while time.time() - start < timeout:
+        status = get_connection_status(tab)
+        logging.info("Current status: %s", status)
+        if status == "connected":
+            logging.info("VPN is now connected ✅")
+            return True
+        time.sleep(interval)
 
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(html)
+    logging.warning("Timeout: VPN did not connect within %d seconds", timeout)
+    return False
 
-    logging.info("Saved tab HTML to %s", filename)
+
+def connect(tab: pychrome.Tab):
+    """
+    Connect if currently disconnected.
+    """
+    status = get_connection_status(tab)
+    logging.info("Initial status: %s", status)
+
+    if status == "disconnected":
+        logging.info("Clicking connect...")
+        tab.call_method(
+            "Runtime.evaluate",
+            expression="document.querySelector('.connect-button').click();"
+        )
+        wait_until_connected(tab)
+    else:
+        # logging.info("Already connected.")
+        reconnect(tab)
+
+
+def reconnect(tab: pychrome.Tab):
+    """
+    Reconnect: disconnect first if connected, then connect again.
+    """
+    status = get_connection_status(tab)
+    logging.info("Initial reconect status: %s", status)
+    
+    if status == "connected":
+        logging.info("Clicking to disconnect first...")
+        tab.call_method(
+            "Runtime.evaluate",
+            expression="document.querySelector('.connect-button').click();"
+        )
+
+        # Wait until status becomes disconnected
+        start = time.time()
+        while time.time() - start < 10:
+            if get_connection_status(tab) == "disconnected":
+                logging.info("Disconnected, now reconnecting...")
+                break
+            time.sleep(1)
+
+    # Now connect again
+    connect(tab)
 
 
 def main():
-    EXTENSION_ID = "majdfhpaihoncoakbjgbdhglocklcgno"  # VPN extension identifier
+    EXTENSION_ID = "majdfhpaihoncoakbjgbdhglocklcgno"
 
     browser = init_browser()
     open_extension_popup()
 
     extension_tab = find_extension_tab(browser, EXTENSION_ID)
-
     if not extension_tab:
         logging.error("Could not locate extension popup. Exiting.")
         return
 
-    click_connect_button(extension_tab)
-    save_tab_html(extension_tab)
+    # Example usage:
+    connect(extension_tab)
+    # reconnect(extension_tab)
 
 
 if __name__ == "__main__":
