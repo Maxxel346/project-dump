@@ -34,7 +34,7 @@ MAIN_REFERER = MAIN_URL # default referer for requests
 USE_TOR = False  # whether to use Tor proxies for media fetching
 
 # Database DSN (consider moving to env var)
-DB_DSN = "postgresql://postgres:p@localhost:5432/rupat"
+DB_DSN = "postgresql://postgres:p@localhost:5432/xxxx"
 
 # Media cache limit in bytes (1 GiB). Use plain numeric literal.
 MEDIA_CACHE_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB
@@ -951,4 +951,5 @@ async def get_search_history(limit: int = 20, user_id: Optional[int] = None):
             "favorite_only": r["favorite_only"],
             "created": r["created"].isoformat() if r["created"] else None
         })
+
     return result
