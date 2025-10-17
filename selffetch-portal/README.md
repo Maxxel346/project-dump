@@ -16,21 +16,14 @@ local dump project. i store metadata i've already scraped in Postgres, serve tha
 
 **structure**
 
-selffetch-portal/
-
-│
-
-├── MediaAPI.py # python backend: connects to Postgres, serves metadata endpoints, proxies media requests to remote API
-
-├── requirements.txt # pip deps (flask/fastapi, psycopg2/asyncpg, requests/httpx, etc)
-
-└── xxx/ # react frontend
-
-├── package.json
-
-├── src/
-
-└── public/
+```selffetch-portal/```
+```│```
+```├── MediaAPI.py # python backend: connects to Postgres, serves metadata endpoints, proxies media requests to remote API```
+```├── requirements.txt # pip deps (flask/fastapi, psycopg2/asyncpg, requests/httpx, etc)```
+```└── xxx/ # react frontend```
+```  ├── package.json```
+```  ├── src/```
+```  └── public/```
 
 
 ### how i use it
