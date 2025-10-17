@@ -59,14 +59,14 @@ TOR_PROXIES = [
     {"socks_port": 9066, "control_port": 9166},
 ]
 
-# Bearer tokens (sensitive) - move to environment/secret store in production
+# Bearer tokens (sensitive) - move to environment
 AUTH_BEARERS = []
 for i in range(1, 10):  # supports up to 9 tokens, expand if needed
     token = os.getenv(f"AUTH_BEARER_{i}")
     if token:
         AUTH_BEARERS.append(token)
 
-# Allowed origins list (for development). Consider restricting in production.
+# Allowed origins list (for development).
 ALLOWED_ORIGINS = ["*"]
 
 
@@ -953,3 +953,4 @@ async def get_search_history(limit: int = 20, user_id: Optional[int] = None):
         })
 
     return result
+
