@@ -5,7 +5,7 @@ local dump project. i store metadata i've already scraped in Postgres, serve tha
 **what it is**
 - a personal local mirror/dashboard.
 - metadata lives in Postgres (already scraped in other sessions).
-- backend (`MediaAPI.py`) reads metadata from Postgres, exposes small endpoints for search/list/detail, and when you open an item it calls the remote site API to fetch the media (so i don't re-scrape metadata, just reuse the db).
+- backend (`mediaAPI.py`) reads metadata from Postgres, exposes small endpoints for search/list/detail, and when you open an item it calls the remote site API to fetch the media (so i don't re-scrape metadata, just reuse the db).
 - frontend (`xxx/`) is a React app that talks to the backend.
 
 **why**
@@ -19,7 +19,7 @@ local dump project. i store metadata i've already scraped in Postgres, serve tha
 ```text
 selffetch-portal/
 │
-├── MediaAPI.py # python backend: connects to Postgres, serves metadata endpoints, proxies media requests to remote API
+├── mediaAPI.py # python backend: connects to Postgres, serves metadata endpoints, proxies media requests to remote API
 ├── requirements.txt # pip deps (fastapi, psycopg2/asyncpg, httpx, etc)
 └── xxx/ # react frontend
   ├── package.json
@@ -29,7 +29,7 @@ selffetch-portal/
 
 
 ### how i use it
-1. run `MediaAPI.py` → starts local api server (fastapi)
+1. run `mediaAPI.py` → starts local api server (fastapi)
 2. run `npm start` inside `/xxx` → open `localhost` ui
 3. browse freely, it fetches data through my backend not directly to that site
 
