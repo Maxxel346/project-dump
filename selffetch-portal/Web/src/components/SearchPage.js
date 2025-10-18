@@ -1,37 +1,33 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-
 // Contexts
 import { useFavorites } from '../FavoriteContext';
 import { useTheme } from '../ThemeContext';
 import { useSearchTags } from '../SearchContext';
-
 // API utilities
 import {
   searchTagsByPrefix,
   searchTagsFuzzy,
   searchMediaByTags,
-  getMediaPreviewUrl, // kept for MediaCard (imported there too, harmless)
   preflight,
   saveSearchHistory,
   getSearchHistory,
 } from '../api';
-
 // Components & hooks
 import TagChip from '../components/TagChip';
 import MediaCard from '../components/MediaCard';
 import PaginationControls from '../components/PaginationControls';
 import useDebounce from '../hooks/useDebounce';
+import { get_persisted_bool, set_persisted_bool } from '../utils/persistedState';
 
 /**
- * SearchPage
- * Main page component — responsible for composing search UI, tag selection, favorites sidebar, media results, and pagination.
- *
- * Debounced autocomplete: uses useDebounce to limit API calls for autosuggestions.
- */
+* SearchPage
+* Main page component — responsible for composing search UI, tag selection, favorites sidebar, media results, and pagination.
+*
+* Debounced autocomplete: uses useDebounce to limit API calls for autosuggestions.
+*/
 export default function SearchPage() {
   const { theme, toggleTheme } = useTheme();
-
   const {
     includeTags,
     setIncludeTags,
@@ -44,37 +40,54 @@ export default function SearchPage() {
     gridScroll,
     setGridScroll,
   } = useSearchTags();
-
   const grid_container_ref = useRef();
-
   // Autocomplete state
   const [autocomplete, set_autocomplete] = useState([]);
   const [loading_autocomplete, set_loading_autocomplete] = useState(false);
   const [show_dropdown, set_show_dropdown] = useState(false);
-
   const { favoriteTags } = useFavorites();
-
   const [show_tag_sidebar, set_show_tag_sidebar] = useState(false);
-
   // Media results
   const LIMIT = 30;
   const [media, set_media] = useState([]);
   const [total, set_total] = useState(0);
   const [loading_media, set_loading_media] = useState(false);
-
   const [favorite_only, set_favorite_only] = useState(false);
   const [search_history, set_search_history] = useState([]);
   const last_saved_signature_ref = useRef(null);
-
   const user_id = null; // derive from auth/localStorage if available in your app
-
   // Debounce the search input before calling autocomplete APIs
   const debounced_search_input = useDebounce(searchInput, 250);
-
   const search_box_ref = useRef();
   const grid_ref = useRef();
-
   const navigate = useNavigate();
+
+  /************** Collapse & Favorites-hide state (persisted) **************/
+  // use snake_case names per spec
+  const INCLUDE_PERSIST_KEY = 'search_tags.include_collapsed_v1';
+  const EXCLUDE_PERSIST_KEY = 'search_tags.exclude_collapsed_v1';
+  const FAVORITES_HIDE_USED_KEY = 'favorites.hide_used_v1';
+
+  // Collapsed state: true = collapsed (show limited rows)
+  const [include_tags_collapsed, set_include_tags_collapsed] = useState(
+    () => get_persisted_bool(INCLUDE_PERSIST_KEY, true)
+  );
+  const [exclude_tags_collapsed, set_exclude_tags_collapsed] = useState(
+    () => get_persisted_bool(EXCLUDE_PERSIST_KEY, true)
+  );
+
+  // Hide used favorites toggle
+  const [favorites_hide_used, set_favorites_hide_used] = useState(
+    () => get_persisted_bool(FAVORITES_HIDE_USED_KEY, false)
+  );
+
+  // Visible capacity heuristic
+  const VISIBLE_LIMIT = 12; // e.g., 3 rows * 4 columns
+
+  // Collapsed visual max-height calculation using safe chip/gap sizes:
+  // 3 rows -> 3 * 36px chip height + 2 * 8px gaps = 124px
+  const COLLAPSED_MAX_HEIGHT = '124px';
+  const EXPANDED_MAX_HEIGHT = '9999px'; // sufficiently large to allow expand; animates from collapsed -> large
 
   /************** helpers **************/
   function build_signature(include_tags, exclude_tags, favorite_only_flag) {
@@ -84,7 +97,6 @@ export default function SearchPage() {
       favoriteOnly: favorite_only_flag,
     });
   }
-
   const add_tag = (tag, type) => {
     if (type === 'IN') setIncludeTags([...includeTags, tag]);
     else setExcludeTags([...excludeTags, tag]);
@@ -92,28 +104,57 @@ export default function SearchPage() {
     set_show_dropdown(false);
     setOffset(0);
   };
-
   const remove_tag = tag => {
     setIncludeTags(includeTags.filter(t => t.value !== tag.value));
     setExcludeTags(excludeTags.filter(t => t.value !== tag.value));
     setOffset(0);
   };
 
-  function handle_media_card_click(id) {
-    if (grid_container_ref.current) {
-      setGridScroll(grid_container_ref.current.scrollTop);
-    }
-    navigate(`/detail/${id}`);
+  /**
+   * is_tag_used
+   * Determine if a given tag is currently present in includeTags or excludeTags.
+   * Compares by id if present, otherwise by value.
+   */
+  function is_tag_used(tag, includes, excludes) {
+    if (!tag) return false;
+    const tag_id = tag.id ?? null;
+    const tag_value = tag.value ?? null;
+    const check = t => (tag_id ? t.id === tag_id : t.value === tag_value);
+    return (includes || []).some(check) || (excludes || []).some(check);
   }
 
-  const handle_page_change = new_offset => {
-    const total_pages = Math.max(1, Math.ceil(total / LIMIT));
-    const max_offset = (total_pages - 1) * LIMIT;
-    setOffset(Math.max(0, Math.min(new_offset, max_offset)));
-  };
+  /**
+   * get_hidden_count
+   * Returns an approximate hidden count based on visible_limit heuristic.
+   */
+  function get_hidden_count(tags, visible_limit = VISIBLE_LIMIT) {
+    if (!tags || !tags.length) return 0;
+    return Math.max(0, tags.length - visible_limit);
+  }
+
+  // Toggle handlers which also persist to localStorage
+  function toggle_include_collapsed() {
+    const next = !include_tags_collapsed;
+    set_include_tags_collapsed(next);
+    set_persisted_bool(INCLUDE_PERSIST_KEY, next);
+  }
+  function toggle_exclude_collapsed() {
+    const next = !exclude_tags_collapsed;
+    set_exclude_tags_collapsed(next);
+    set_persisted_bool(EXCLUDE_PERSIST_KEY, next);
+  }
+  function toggle_favorites_hide_used() {
+    const next = !favorites_hide_used;
+    set_favorites_hide_used(next);
+    set_persisted_bool(FAVORITES_HIDE_USED_KEY, next);
+  }
+
+  // Derive shown_favorites based on favorites_hide_used and include/exclude lists
+  const shown_favorites = favorites_hide_used
+    ? favoriteTags.filter(t => !is_tag_used(t, includeTags, excludeTags))
+    : favoriteTags;
 
   /************** effects **************/
-
   // Load recent search history once
   useEffect(() => {
     let active = true;
@@ -129,7 +170,6 @@ export default function SearchPage() {
       active = false;
     };
   }, []);
-
   // Save scroll on unmount (back navigation)
   useEffect(() => {
     const node = grid_container_ref.current;
@@ -137,15 +177,12 @@ export default function SearchPage() {
       if (node) setGridScroll(node.scrollTop);
     };
   }, [setGridScroll]);
-
   // Restore scroll position after media load (attempt frames)
   useEffect(() => {
     if (loading_media || !grid_container_ref.current || !media.length || !gridScroll) return;
-
     let cancelled = false;
     let try_count = 0;
     const node = grid_container_ref.current;
-
     function try_scroll() {
       if (cancelled) return;
       if (node.scrollHeight - node.clientHeight >= gridScroll) {
@@ -156,18 +193,15 @@ export default function SearchPage() {
       }
     }
     requestAnimationFrame(try_scroll);
-
     return () => {
       cancelled = true;
     };
   }, [loading_media, media.length, gridScroll]);
-
   // Fetch media when filters/pagination changes
   useEffect(() => {
     let running = true;
     set_loading_media(true);
     set_media([]);
-
     searchMediaByTags(
       includeTags.map(t => t.value),
       excludeTags.map(t => t.value),
@@ -178,7 +212,6 @@ export default function SearchPage() {
     )
       .then(async data => {
         const items = data.items || [];
-
         if (items.length) {
           try {
             const ids = items.map(m => m.id);
@@ -187,13 +220,10 @@ export default function SearchPage() {
             console.error('Preflight error', e);
           }
         }
-
         if (!running) return;
-
         set_media(items);
         set_total(data.total || 0);
         set_loading_media(false);
-
         const signature = build_signature(includeTags, excludeTags, favorite_only);
         if (signature !== last_saved_signature_ref.current) {
           last_saved_signature_ref.current = signature;
@@ -204,7 +234,6 @@ export default function SearchPage() {
             user_id
           ).catch(err => console.warn('Failed saving search history', err));
         }
-
         // Background fetch for next page (fire-and-forget)
         const next_offset = offset + LIMIT;
         (async () => {
@@ -234,12 +263,10 @@ export default function SearchPage() {
         set_total(0);
         set_loading_media(false);
       });
-
     return () => {
       running = false;
     };
   }, [includeTags, excludeTags, offset]); // kept as original
-
   // Autocomplete effect: uses debounced_search_input
   useEffect(() => {
     let active = true;
@@ -250,27 +277,22 @@ export default function SearchPage() {
         return;
       }
       set_loading_autocomplete(true);
-
       let results = await searchTagsByPrefix(debounced_search_input, 15).catch(() => []);
       if (!results || !results.length) {
         results = await searchTagsFuzzy(debounced_search_input, 15).catch(() => []);
       }
-
       const chosen_ids = new Set([...includeTags.map(t => t.id), ...excludeTags.map(t => t.id)]);
       const chosen_values = new Set([...includeTags.map(t => t.value), ...excludeTags.map(t => t.value)]);
       const filtered = results.filter(t => !chosen_ids.has(t.id) && !chosen_values.has(t.value));
-
       if (active) set_autocomplete(filtered);
       set_show_dropdown(filtered.length > 0);
       set_loading_autocomplete(false);
     };
-
     load_tags();
     return () => {
       active = false;
     };
   }, [debounced_search_input, includeTags, excludeTags]);
-
   // Responsive grid columns
   const [cols, set_cols] = useState(2);
   useEffect(() => {
@@ -286,7 +308,6 @@ export default function SearchPage() {
     window.addEventListener('resize', handle_resize);
     return () => window.removeEventListener('resize', handle_resize);
   }, []);
-
   // Click outside search box closes dropdown
   useEffect(() => {
     function handler(e) {
@@ -316,7 +337,6 @@ export default function SearchPage() {
               if (searchInput.length >= 2) set_show_dropdown(true);
             }}
           />
-
           {show_dropdown && (
             <div className="absolute z-20 w-full mt-1 bg-white border shadow-lg rounded-lg max-h-64 overflow-auto dark:bg-gray-700">
               {loading_autocomplete && <div className="p-3 text-gray-500 text-sm">Loading…</div>}
@@ -337,7 +357,6 @@ export default function SearchPage() {
             </div>
           )}
         </div>
-
         <div className="mt-2 mb-2">
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={favorite_only} onChange={e => { set_favorite_only(e.target.checked); setOffset(0); }} />
@@ -345,20 +364,80 @@ export default function SearchPage() {
           </label>
         </div>
 
+        {/* INCLUDE TAGS with collapse */}
         <div className="mb-2">
-          <span className="text-blue-600 font-semibold text-sm">Include:</span>
-          <div className="mt-1 flex flex-wrap">
+          <div className="flex items-center justify-between">
+            <span className="text-blue-600 font-semibold text-sm">Include:</span>
+            {/* Optionally show count */}
+            <span className="text-xs text-gray-500">{includeTags.length} selected</span>
+          </div>
+          <div
+            id="include-tags-list"
+            className="mt-1 flex flex-wrap transition-max-height"
+            style={{
+              maxHeight: include_tags_collapsed ? COLLAPSED_MAX_HEIGHT : EXPANDED_MAX_HEIGHT,
+              overflow: 'hidden',
+              transition: 'max-height 160ms ease',
+            }}
+          >
             {includeTags.length === 0 && <span className="text-gray-400 text-xs ml-1">None</span>}
             {includeTags.map(tag => <TagChip key={tag.id ?? tag.value} tag={tag} type="IN" on_remove={remove_tag} />)}
           </div>
+          {/* Toggle button */}
+          {includeTags.length > VISIBLE_LIMIT && (
+            <div className="mt-1">
+              <button
+                className="text-sm text-blue-600 hover:underline inline-flex items-center gap-2 focus:outline-none"
+                onClick={toggle_include_collapsed}
+                aria-expanded={include_tags_collapsed ? "false" : "true"}
+                aria-controls="include-tags-list"
+              >
+                {include_tags_collapsed ? 'Show more' : 'Show less'}
+                {include_tags_collapsed && (
+                  <span className="ml-1 inline-block bg-gray-200 text-gray-700 text-xs px-2 py-0.5 rounded-full">
+                    +{get_hidden_count(includeTags)}
+                  </span>
+                )}
+              </button>
+            </div>
+          )}
         </div>
 
+        {/* EXCLUDE TAGS with collapse */}
         <div>
-          <span className="text-red-600 font-semibold text-sm">Exclude:</span>
-          <div className="mt-1 flex flex-wrap">
+          <div className="flex items-center justify-between">
+            <span className="text-red-600 font-semibold text-sm">Exclude:</span>
+            <span className="text-xs text-gray-500">{excludeTags.length} selected</span>
+          </div>
+          <div
+            id="exclude-tags-list"
+            className="mt-1 flex flex-wrap"
+            style={{
+              maxHeight: exclude_tags_collapsed ? COLLAPSED_MAX_HEIGHT : EXPANDED_MAX_HEIGHT,
+              overflow: 'hidden',
+              transition: 'max-height 160ms ease',
+            }}
+          >
             {excludeTags.length === 0 && <span className="text-gray-400 text-xs ml-1">None</span>}
             {excludeTags.map(tag => <TagChip key={tag.id ?? tag.value} tag={tag} type="EX" on_remove={remove_tag} />)}
           </div>
+          {excludeTags.length > VISIBLE_LIMIT && (
+            <div className="mt-1">
+              <button
+                className="text-sm text-red-600 hover:underline inline-flex items-center gap-2 focus:outline-none"
+                onClick={toggle_exclude_collapsed}
+                aria-expanded={exclude_tags_collapsed ? "false" : "true"}
+                aria-controls="exclude-tags-list"
+              >
+                {exclude_tags_collapsed ? 'Show more' : 'Show less'}
+                {exclude_tags_collapsed && (
+                  <span className="ml-1 inline-block bg-gray-200 text-gray-700 text-xs px-2 py-0.5 rounded-full">
+                    +{get_hidden_count(excludeTags)}
+                  </span>
+                )}
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="mt-4">
@@ -407,7 +486,6 @@ export default function SearchPage() {
       >
         {theme === 'dark' ? "🌙 Dark" : "☀️ Light"}
       </button>
-
       <button
         className="fixed z-30 right-3 top-3 bg-yellow-400 hover:bg-yellow-500 text-yellow-900 font-bold px-4 py-2 rounded-full shadow-lg md:right-6"
         onClick={()=>set_show_tag_sidebar(s => !s)}
@@ -424,16 +502,39 @@ export default function SearchPage() {
       >
         <div className="flex items-center justify-between px-4 py-3 border-b">
           <span className="font-semibold text-lg">⭐ Favorite Tags</span>
-          <button className="text-xl text-gray-400 hover:text-gray-700" onClick={()=>set_show_tag_sidebar(false)}>&times;</button>
+          <div className="flex items-center gap-3">
+            {/* Hide used toggle */}
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={favorites_hide_used}
+                onChange={toggle_favorites_hide_used}
+                className="form-checkbox"
+                aria-label="Hide favorite tags used in filters"
+              />
+              <span className="text-sm">Hide used</span>
+            </label>
+            {/* small badge showing how many hidden when active */}
+            {favorites_hide_used && (() => {
+              const hidden_count = favoriteTags.length - shown_favorites.length;
+              return hidden_count > 0 ? (
+                <span className="inline-block bg-gray-200 text-gray-700 text-xs px-2 py-0.5 rounded-full">
+                  Hiding {hidden_count}
+                </span>
+              ) : null;
+            })()}
+            <button className="text-xl text-gray-400 hover:text-gray-700" onClick={()=>set_show_tag_sidebar(false)}>&times;</button>
+          </div>
         </div>
+
         <div className="p-4 overflow-y-auto" style={{ maxHeight: "calc(100vh - 56px)" }}>
           {favoriteTags.length === 0 ? (
             <div className="text-gray-400 text-sm">No favorite tags yet.<br/>Right-click/long-press a tag to add.</div>
           ) : (
             <div className="flex flex-wrap gap-2">
-              {favoriteTags.map(tag => (
+              {shown_favorites.map(tag => (
                 <button
-                  key={tag.id}
+                  key={tag.id ?? tag.value}
                   className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-xs mr-2 mb-2 border font-medium focus:ring-2 focus:ring-yellow-300 transition shadow hover:bg-yellow-200"
                   title="Click to add to filters"
                   onClick={() => {
@@ -444,6 +545,10 @@ export default function SearchPage() {
                   {tag.value}
                 </button>
               ))}
+              {/* If hiding is active and nothing is shown, inform user */}
+              {favorites_hide_used && shown_favorites.length === 0 && (
+                <div className="text-sm text-gray-500">All favorites are currently used in filters.</div>
+              )}
             </div>
           )}
         </div>
@@ -455,8 +560,11 @@ export default function SearchPage() {
           <div className="flex items-center justify-center w-full h-72 text-gray-500">Loading media…</div>
         ) : (
           <>
-            <PaginationControls offset={offset} limit={LIMIT} total={total} on_page_change={handle_page_change} />
-
+            <PaginationControls offset={offset} limit={LIMIT} total={total} on_page_change={(new_offset) => {
+              const total_pages = Math.max(1, Math.ceil(total / LIMIT));
+              const max_offset = (total_pages - 1) * LIMIT;
+              setOffset(Math.max(0, Math.min(new_offset, max_offset)));
+            }} />
             <div
               ref={grid_ref}
               className="grid gap-2 auto-rows-fr"
@@ -464,14 +572,22 @@ export default function SearchPage() {
             >
               {media && media.length > 0 ? (
                 media.map(m => (
-                  <MediaCard key={m.id} media={m} on_click={() => handle_media_card_click(m.id)} />
+                  <MediaCard key={m.id} media={m} on_click={() => {
+                    if (grid_container_ref.current) {
+                      setGridScroll(grid_container_ref.current.scrollTop);
+                    }
+                    navigate(`/detail/${m.id}`);
+                  }} />
                 ))
               ) : (
                 <div className="col-span-full w-full text-center text-gray-400 py-8 text-lg">No results found.</div>
               )}
             </div>
-
-            <PaginationControls offset={offset} limit={LIMIT} total={total} on_page_change={handle_page_change} />
+            <PaginationControls offset={offset} limit={LIMIT} total={total} on_page_change={(new_offset) => {
+              const total_pages = Math.max(1, Math.ceil(total / LIMIT));
+              const max_offset = (total_pages - 1) * LIMIT;
+              setOffset(Math.max(0, Math.min(new_offset, max_offset)));
+            }} />
             <div className="mt-8" />
           </>
         )}
