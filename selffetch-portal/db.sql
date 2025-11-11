@@ -264,8 +264,6 @@ ALTER TABLE public.media_tags OWNER TO postgres;
 CREATE TABLE public.search_history (
     id bigint NOT NULL,
     user_id bigint,
-    include_tags text[] DEFAULT '{}'::text[] NOT NULL,
-    exclude_tags text[] DEFAULT '{}'::text[] NOT NULL,
     favorite_only boolean DEFAULT false NOT NULL,
     created timestamp without time zone DEFAULT now() NOT NULL,
     include_tags_json jsonb DEFAULT '[]'::jsonb NOT NULL,
