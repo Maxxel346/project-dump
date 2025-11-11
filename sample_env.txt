@@ -1,0 +1,10 @@
+# Base URLs for your scraper backend
+MAIN_URL=https://example.com/
+MAIN_CDN=https://cdn.example.com/
+
+# Whether to use Tor proxies (set to True to enable)
+TOR_USE=True
+
+# Example bearer tokens if you have any (optional)
+AUTH_BEARER_1=your_token_1
+AUTH_BEARER_2=your_token_2
