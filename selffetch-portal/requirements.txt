@@ -1,7 +1,9 @@
 asyncpg
 requests
+requests[socks]
 cachetools
 python-dotenv
 fastapi
 pydantic
 stem
+
