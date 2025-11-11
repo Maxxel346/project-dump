@@ -5,7 +5,8 @@ import time
 from collections import deque
 from threading import Lock
 from typing import List, Optional
-
+import pathlib
+import json
 
 import asyncpg
 import requests
@@ -31,10 +32,44 @@ MAIN_CDN = os.getenv("MAIN_CDN")
 MAIN_REFERER = MAIN_URL # default referer for requests
 
 
-USE_TOR = False  # whether to use Tor proxies for media fetching
 
+# Read TOR_USE flag from environment, convert to bool with default False
+TOR_USE = os.getenv("TOR_USE", "False").lower() in ("1", "true", "yes", "on")
+
+# Path for tor proxies JSON config file alongside .env
+BASE_DIR = pathlib.Path(__file__).parent.resolve()
+TOR_CONFIG_PATH = BASE_DIR / "tor_proxies.json"
+
+# Tor proxies list (will be populated from JSON if TOR_USE is True)
+TOR_PROXIES = []
+
+# Load Tor proxies configuration if TOR_USE is enabled
+if TOR_USE:
+    try:
+        with open(TOR_CONFIG_PATH, "r") as f:
+            tor_config_data = json.load(f)
+            # Expecting list of dicts with "ip":"127.0.0.1", "socks_port", "control_port", optional "control_password"
+            # Validate minimal keys exist
+            TOR_PROXIES = [
+                {
+                    "ip": item.get("ip", "127.0.0.1"),  # default to localhost if missing
+                    "socks_port": int(item["socks_port"]),
+                    "control_port": int(item["control_port"]),
+                    "control_password": item.get("control_password", None),  # Optional
+                }
+                for item in tor_config_data
+                if "socks_port" in item and "control_port" in item
+            ]
+            if not TOR_PROXIES:
+                print("[WARNING] TOR_USE is True, but no valid proxies found in tor_proxies.json")
+    except Exception as e:
+        print(f"[ERROR] Failed to load tor_proxies.json: {e}")
+        TOR_PROXIES = []
+else:
+    # If TOR_USE is False, keep TOR_PROXIES empty or empty list
+    TOR_PROXIES = []
 # Database DSN (consider moving to env var)
-DB_DSN = "postgresql://postgres:p@localhost:5432/xxxx"
+DB_DSN = "postgresql://postgres:p@localhost:5432/rupat"
 
 # Media cache limit in bytes (1 GiB). Use plain numeric literal.
 MEDIA_CACHE_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB
@@ -59,14 +94,14 @@ TOR_PROXIES = [
     {"socks_port": 9066, "control_port": 9166},
 ]
 
-# Bearer tokens (sensitive) - move to environment
+# Bearer tokens (sensitive) - move to environment/secret store in production
 AUTH_BEARERS = []
 for i in range(1, 10):  # supports up to 9 tokens, expand if needed
     token = os.getenv(f"AUTH_BEARER_{i}")
     if token:
         AUTH_BEARERS.append(token)
 
-# Allowed origins list (for development).
+# Allowed origins list (for development). Consider restricting in production.
 ALLOWED_ORIGINS = ["*"]
 
 
@@ -123,19 +158,20 @@ class RoundRobin:
             return item
 
 
-# Create global round-robins for bearers and proxies
+# ====================
+# Utilities: round-robin for bearers and proxies
+# ====================
 bearer_rr = RoundRobin(AUTH_BEARERS)
 proxy_rr = RoundRobin(TOR_PROXIES)
-
 
 def get_next_bearer() -> str:
     """Return next bearer token in round-robin fashion."""
     return bearer_rr.next()
 
-
 def get_next_proxy():
     """Return next proxy object and index (index not used outside)."""
-    return proxy_rr.next()
+    return proxy_rr.next() if TOR_USE and TOR_PROXIES else None
+
 
 
 def make_headers(referer: Optional[str] = None, include_bearer: bool = True) -> dict:
@@ -205,22 +241,25 @@ class MediaLRUCache:
 media_cache = MediaLRUCache(MEDIA_CACHE_MAX_BYTES)
 
 # ====================
-# Tor control helper
+# Tor control helper (updated to use control_password from config)
 # ====================
 
-
-def newnym_tor_port(control_port: int, control_password: Optional[str] = "your-password"):
+def newnym_tor_port(control_port: int, control_password: Optional[str] = None, ip: str = "127.0.0.1"):
     """
-    Signal Tor to create a new circuit on the control_port. The password should be configured properly.
-    Note: in production, keep control password in a secret store and ensure Controller.from_port authentication works.
+    Signal Tor to create a new circuit using the given control port and password.
+    Connects to ip (default localhost).
     """
     try:
-        with Controller.from_port(port=control_port) as controller:
-            controller.authenticate(password=control_password)
+        with Controller.from_port(port=control_port, address=ip) as controller:
+            if control_password:
+                controller.authenticate(password=control_password)
+            else:
+                # Try cookie authentication or no auth
+                controller.authenticate()
             controller.signal(Signal.NEWNYM)
+            print(f"[newnym_tor_port] NEWNYM signal sent on {ip}:{control_port}")
     except Exception as exc:
-        # We swallow exceptions so the calling code can retry with different proxy
-        print(f"[newnym] failed for control_port={control_port}: {exc}")
+        print(f"[newnym_tor_port] failed for {ip}:{control_port}: {exc}")
 
 
 # ====================
@@ -242,13 +281,17 @@ def _streaming_response_from_requests(resp: requests.Response) -> StreamingRespo
     return StreamingResponse(resp.iter_content(chunk_size=8192), media_type=resp.headers.get("Content-Type", "video/mp4"), headers=filtered_headers)
 
 
+# ====================
+# Media fetching (modified to support tor proxies with IP/Port/password)
+# ====================
+
 def fetch_media(url: str, media_type: str = "image", max_retries: int = 6, post_id: Optional[int] = None):
     """
-    Fetch media from target URLs, using proxies in round-robin and attempting NEWNYM on connection reset.
-    Returns either fastapi.Response (for images) or StreamingResponse (for videos).
-    Raises HTTPException on permanent failure.
+    Fetch media from target URLs, optionally using Tor proxies in round-robin.
+    If TOR_USE is False, no proxies are used.
+    Raises HTTPException on failure.
     """
-    # Check cache for images (we don't cache big videos)
+    # Check cache (images only)
     cached = media_cache.get(url)
     if cached and media_type == "image":
         content, content_type, _ = cached
@@ -259,48 +302,51 @@ def fetch_media(url: str, media_type: str = "image", max_retries: int = 6, post_
     headers = {
         "Referer": referer,
         "User-Agent": random.choice(USER_AGENTS),
-        "Dnt": "1",
-        # "Authorization": f"Bearer {get_next_bearer()}", 
+        "DNT": "1",
+        # "Authorization": f"Bearer {get_next_bearer()}",  # optionally enable if needed
     }
-
     last_exc = None
 
     for attempt in range(max_retries):
-        if not USE_TOR:
+        # Pick next proxy if TOR_USE, else None
+        if TOR_USE:
+            proxy_conf = get_next_proxy()
+        else:
             proxy_conf = None
+
         if proxy_conf is None:
-            # No proxies configured; fallback to direct connection
+            # Direct connection (no proxy)
             socks_port = None
             control_port = None
+            control_password = None
+            ip = None
         else:
             socks_port = proxy_conf.get("socks_port")
             control_port = proxy_conf.get("control_port")
+            control_password = proxy_conf.get("control_password", None)
+            ip = proxy_conf.get("ip", "127.0.0.1")
 
-        # Build requests proxies dict for socks if present (requests + socks support needed)
+        # Build proxies dict if socks_port is set
         proxies = {}
-        if socks_port:
+        if socks_port and ip:
             proxies = {
-                "http": f"socks5h://127.0.0.1:{socks_port}",
-                "https": f"socks5h://127.0.0.1:{socks_port}",
+                "http": f"socks5h://{ip}:{socks_port}",
+                "https": f"socks5h://{ip}:{socks_port}",
             }
 
         try:
-            # Image (small) - fetch fully and cache
             if media_type == "image":
                 resp = session.get(url, headers=headers, timeout=10, proxies=proxies)
                 if resp.status_code == 200:
-                    # pick content type heuristically
                     content_type = "image/avif" if url.endswith(".avif") else resp.headers.get("Content-Type", "image/jpeg")
                     media_cache.set(url, resp.content, content_type)
                     return Response(content=resp.content, media_type=content_type)
                 if resp.status_code == 404:
                     raise HTTPException(status_code=404, detail="Image not found")
-                # treat some 500/resets as transient
                 if resp.status_code == 500 and "ConnectionResetError" in resp.text:
                     raise ValueError("Tor 500/ConnectionReset")
                 raise HTTPException(status_code=resp.status_code, detail=f"[{socks_port}] {resp.text}")
 
-            # Video streaming
             elif media_type == "video":
                 resp = session.get(url, headers=headers, timeout=60, stream=True, proxies=proxies)
                 if resp.status_code == 200:
@@ -310,30 +356,32 @@ def fetch_media(url: str, media_type: str = "image", max_retries: int = 6, post_
                 if resp.status_code == 500 and "ConnectionResetError" in resp.text:
                     raise ValueError("Tor 500/ConnectionReset")
                 raise HTTPException(status_code=resp.status_code, detail=f"[{socks_port}] {resp.text}")
+
             else:
                 raise HTTPException(status_code=400, detail="Bad media type")
+
         except requests.exceptions.ConnectionError as ce:
-            # Windows Winsock 10054 or similar connection reset cases
             msg = str(ce)
             last_exc = ce
+            # Detect common connection reset signals
             if "10054" in msg or "forcibly closed" in msg or "Connection aborted" in msg:
                 print(f"[fetch_media] Tor@{socks_port}: connection reset detected -> NEWNYM and retry")
-                if control_port:
-                    newnym_tor_port(control_port)
-                    time.sleep(1.5)
-                continue
-        except Exception as exc:
-            last_exc = exc
-            # If matches reset pattern, attempt NEWNYM and continue; else the outer loop will try other proxies
-            msg = str(exc)
-            if "10054" in msg or "forcibly closed" in msg or "Connection aborted" in msg:
-                print(f"[fetch_media] generic connection reset -> NEWNYM on control_port={control_port}")
-                if control_port:
-                    newnym_tor_port(control_port)
+                if control_port and ip:
+                    newnym_tor_port(control_port, control_password, ip)
                     time.sleep(1.5)
                 continue
 
-    # If reached here, all attempts failed
+        except Exception as exc:
+            last_exc = exc
+            msg = str(exc)
+            if "10054" in msg or "forcibly closed" in msg or "Connection aborted" in msg:
+                print(f"[fetch_media] generic connection reset -> NEWNYM on control_port={control_port}")
+                if control_port and ip:
+                    newnym_tor_port(control_port, control_password, ip)
+                    time.sleep(1.5)
+                continue
+
+    # Exhausted all retries
     raise HTTPException(status_code=500, detail=f"Failed to fetch after retries: {last_exc}")
 
 
@@ -465,7 +513,7 @@ async def fetch_preflight(ids: List[int] = Body(...)):
     # quick cache hit
     if key in preflight_cache:
         return {"cached": True}
-    url = "{MAIN_URL}api/v2/post/action/states"
+    url = f"{MAIN_URL}api/v2/post/action/states"
     headers = make_headers(referer=f"{MAIN_URL}post/{ids[0]}" if ids else MAIN_REFERER, include_bearer=True)
     payload = ids
     try:
@@ -492,6 +540,7 @@ async def fetch_suggestion(post_id: int):
     The original network also posted to /post/action/state before fetching suggestions so we keep that best-effort behavior.
     """
     url_get = f"{MAIN_URL}api/v2/post/suggestion/{post_id}"
+    print(f"[fetch_suggestion] fetching suggestions for url_get={url_get}")
     referer = f"{MAIN_URL}post/{post_id}"
     headers = {
         "Accept": "application/json, text/plain, */*",
@@ -507,7 +556,9 @@ async def fetch_suggestion(post_id: int):
 
     # Best-effort POST to action/state as in original code (ignore errors)
     try:
-        session.post("{MAIN_URL}api/v2/post/action/state", json={"postId": post_id}, headers=headers, timeout=15)
+        print(f"[fetch_suggestion] posting state for url={MAIN_URL}api/v2/post/action/state")
+
+        session.post(f"{MAIN_URL}api/v2/post/action/state", json={"postId": post_id}, headers=headers, timeout=15)
     except Exception as exc:
         print(f"[fetch_suggestion] state POST exception (ignored): {exc}")
 
@@ -951,6 +1002,4 @@ async def get_search_history(limit: int = 20, user_id: Optional[int] = None):
             "favorite_only": r["favorite_only"],
             "created": r["created"].isoformat() if r["created"] else None
         })
-
     return result
-
