@@ -1,0 +1,174 @@
+<!doctype html>
+
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Auth Demo (React)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+body { font-family: Arial, sans-serif; padding: 20px; }
+.card { border: 1px solid #ddd; padding: 16px; border-radius: 6px; max-width: 520px; margin: 24px auto; }
+input { width: 100%; padding: 8px; margin-top: 6px; box-sizing: border-box; }
+button { padding: 8px 14px; margin-right: 8px; }
+pre { background: #f6f8fa; padding: 12px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Use unpkg CDN for React & axios (demo only) -->
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+
+<script type="text/javascript">
+const { useState, useRef, useEffect } = React;
+
+// We'll keep the access token in a ref/state (in memory)
+let accessTokenRef = { current: null };
+
+// axios instance configured to include cookies
+const api = axios.create({
+baseURL: 'http://localhost:4000',
+withCredentials: true
+});
+
+// Refresh control
+let isRefreshing = false;
+let subscribers = [];
+
+function subscribe(cb) { subscribers.push(cb); }
+function onRefreshed(token) { subscribers.forEach(cb => cb(token)); subscribers = []; }
+
+async function doRefresh() {
+try {
+const resp = await axios.post('http://localhost:4000/api/refresh', null, { withCredentials: true });
+const newToken = resp.data?.accessToken;
+accessTokenRef.current = newToken;
+return newToken;
+} catch (e) {
+accessTokenRef.current = null;
+throw e;
+}
+}
+
+// attach Authorization header if we have token
+api.interceptors.request.use(cfg => {
+if (accessTokenRef.current) {
+cfg.headers = cfg.headers || {};
+cfg.headers.Authorization = 'Bearer ' + accessTokenRef.current;
+}
+return cfg;
+});
+
+api.interceptors.response.use(r => r, async (error) => {
+const originalReq = error.config;
+if (!originalReq) return Promise.reject(error);
+if (error.response && error.response.status === 401 && !originalReq._retry) {
+originalReq._retry = true;
+if (!isRefreshing) {
+isRefreshing = true;
+try {
+const newTok = await doRefresh();
+isRefreshing = false;
+onRefreshed(newTok);
+} catch (e) {
+isRefreshing = false;
+onRefreshed(null);
+// refresh failed -> user must re-login
+return Promise.reject(error);
+}
+}
+return new Promise((resolve, reject) => {
+subscribe((token) => {
+if (!token) {
+reject(error);
+return;
+}
+originalReq.headers['Authorization'] = 'Bearer ' + token;
+resolve(api(originalReq));
+});
+});
+}
+return Promise.reject(error);
+});
+
+// Simple React app
+function App() {
+const [loggedIn, setLoggedIn] = useState(false);
+const [loading, setLoading] = useState(false);
+const [email, setEmail] = useState('user@example.com');
+const [password, setPassword] = useState('password');
+const [message, setMessage] = useState('');
+
+useEffect(() => {
+// nothing to do at start. Could attempt silent refresh here if you want.
+}, []);
+
+async function login(e) {
+e && e.preventDefault();
+setMessage('');
+setLoading(true);
+try {
+const resp = await axios.post('http://localhost:4000/api/login', { email, password }, { withCredentials: true });
+const token = resp.data?.accessToken;
+accessTokenRef.current = token;
+setLoggedIn(true);
+setMessage('Logged in');
+} catch (err) {
+console.error(err);
+setMessage('Login failed: ' + (err.response?.data?.message || err.message));
+} finally { setLoading(false); }
+}
+
+async function callProtected() {
+setMessage('');
+try {
+const r = await api.get('/api/protected');
+setMessage('Protected response: ' + JSON.stringify(r.data));
+} catch (err) {
+console.error(err);
+setMessage('Error calling protected: ' + (err.response?.status || err.message));
+if (err.response && err.response.status === 401) {
+setLoggedIn(false);
+}
+}
+}
+
+async function logout() {
+try {
+await axios.post('http://localhost:4000/api/logout', null, { withCredentials: true });
+} catch (e) {
+console.warn('logout error', e);
+}
+accessTokenRef.current = null;
+setLoggedIn(false);
+setMessage('Logged out');
+}
+
+return React.createElement('div', { className: 'card' },
+React.createElement('h2', null, 'Demo Login'),
+!loggedIn ? React.createElement('form', { onSubmit: login },
+React.createElement('label', null, 'Email', React.createElement('input', { value: email, onChange: e => setEmail(e.target.value), type: 'email', required: true })),
+React.createElement('label', { style: { display: 'block', marginTop: 10 } }, 'Password', React.createElement('input', { value: password, onChange: e => setPassword(e.target.value), type: 'password', required: true })),
+React.createElement('div', { style: { marginTop: 12 } },
+React.createElement('button', { type: 'submit', disabled: loading }, loading ? 'Signing in...' : 'Sign in'),
+React.createElement('button', { type: 'button', onClick: () => { setEmail('user@example.com'); setPassword('password'); } }, 'Fill demo creds')
+)
+) : React.createElement('div', null,
+React.createElement('div', null,
+React.createElement('button', { onClick: callProtected }, 'Call Protected API'),
+React.createElement('button', { onClick: logout }, 'Logout')
+)
+),
+React.createElement('div', { style: { marginTop: 12 } },
+React.createElement('strong', null, message ? message : 'No messages yet')
+),
+React.createElement('div', { style: { marginTop: 12, fontSize: 12, color: '#666' } }, 'Access token is stored in memory. Refresh token is an HttpOnly cookie.')
+);
+}
+
+const root = document.getElementById('root');
+ReactDOM.createRoot(root).render(React.createElement(App));
+</script> </body>
+</html>
