@@ -263,7 +263,10 @@ export default function DetailPage() {
   const recommend_controller_ref = useRef(null);
   const batch_controller_ref = useRef(null);
   const rec_timer_ref = useRef(null);
-
+  useEffect(() => {
+    const link = document.querySelector("link[rel~='icon']");
+    link.href = "/icons/loop.png";  // path is still relative to public/
+  }, []);
   // Helper: create a stable toggle function for item id (memoized via useCallback)
   const make_toggle_for = useCallback((id_to_toggle) => {
     return () => {
@@ -518,4 +521,5 @@ export default function DetailPage() {
       </div>
     </div>
   );
+
 }
