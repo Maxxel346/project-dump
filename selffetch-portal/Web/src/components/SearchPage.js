@@ -32,6 +32,8 @@ export default function SearchPage() {
     const link = document.querySelector("link[rel~='icon']");
     if (link) link.href = "/icons/home.png"; 
   }, []);
+  const [showRecent, setShowRecent] = useState(false);
+
   const {
     includeTags,
     setIncludeTags,
@@ -447,39 +449,63 @@ export default function SearchPage() {
         <div className="mt-4">
           <div className="flex items-center justify-between">
             <span className="font-semibold">Recent searches</span>
-            <button className="text-xs text-blue-500" onClick={async () => {
-              try {
-                const hist = await getSearchHistory(50, user_id);
-                set_search_history(hist);
-              } catch(e) { console.warn(e) }
-            }}>Refresh</button>
+
+            <div className="flex items-center gap-2">
+              <button
+                className="text-xs text-blue-500"
+                onClick={async () => {
+                  try {
+                    const hist = await getSearchHistory(50, user_id);
+                    set_search_history(hist);
+                  } catch (e) { console.warn(e) }
+                }}
+              >
+                Refresh
+              </button>
+
+              {/* ▼ Toggle Button */}
+              <button
+                className="text-xs text-gray-600"
+                onClick={() => setShowRecent(prev => !prev)}
+              >
+                {showRecent ? "Hide ▲" : "Show ▼"}
+              </button>
+            </div>
           </div>
-          <div className="mt-2 max-h-40 overflow-auto">
-            {search_history.length === 0 ? (
-              <div className="text-xs text-gray-400">No recent searches</div>
-            ) : (
-              search_history.map(h => (
-                <button key={h.id}
-                  className="w-full text-left px-2 py-1 hover:bg-gray-100 rounded text-sm"
-                  onClick={() => {
-                    setIncludeTags((h.include_tags || []).map(v => ({ id: null, value: v })));
-                    setExcludeTags((h.exclude_tags || []).map(v => ({ id: null, value: v })));
-                    set_favorite_only(!!h.favorite_only);
-                    setOffset(0);
-                  }}
-                >
-                  <div className="flex justify-between">
-                    <div className="truncate">
-                      <span className="text-xs text-gray-600">IN:</span> {(h.include_tags||[]).join(', ')}{' '}
-                      <span className="ml-1 text-xs text-gray-600">EX:</span> {(h.exclude_tags||[]).join(', ')}
+
+          {/* ▼ Only show this when toggled ON */}
+          {showRecent && (
+            <div className="mt-2 max-h-40 overflow-auto">
+              {search_history.length === 0 ? (
+                <div className="text-xs text-gray-400">No recent searches</div>
+              ) : (
+                search_history.map(h => (
+                  <button
+                    key={h.id}
+                    className="w-full text-left px-2 py-1 hover:bg-gray-100 rounded text-sm"
+                    onClick={() => {
+                      setIncludeTags((h.include_tags || []).map(v => ({ id: null, value: v })));
+                      setExcludeTags((h.exclude_tags || []).map(v => ({ id: null, value: v })));
+                      set_favorite_only(!!h.favorite_only);
+                      setOffset(0);
+                    }}
+                  >
+                    <div className="flex justify-between">
+                      <div className="truncate">
+                        <span className="text-xs text-gray-600">IN:</span> {(h.include_tags || []).join(", ")}{" "}
+                        <span className="ml-1 text-xs text-gray-600">EX:</span> {(h.exclude_tags || []).join(", ")}
+                      </div>
                     </div>
-                  </div>
-                  {h.favorite_only && <div className="text-xs text-yellow-700">Favorites only</div>}
-                </button>
-              ))
-            )}
-          </div>
+                    {h.favorite_only && (
+                      <div className="text-xs text-yellow-700">Favorites only</div>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
         </div>
+
       </div>
 
       {/* Floating buttons */}
@@ -599,4 +625,3 @@ export default function SearchPage() {
     </div>
   );
 }
-
