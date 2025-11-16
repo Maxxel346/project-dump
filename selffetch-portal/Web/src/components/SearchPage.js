@@ -28,6 +28,10 @@ import { get_persisted_bool, set_persisted_bool } from '../utils/persistedState'
 */
 export default function SearchPage() {
   const { theme, toggleTheme } = useTheme();
+  useEffect(() => {
+    const link = document.querySelector("link[rel~='icon']");
+    if (link) link.href = "/icons/home.png"; 
+  }, []);
   const {
     includeTags,
     setIncludeTags,
@@ -595,3 +599,4 @@ export default function SearchPage() {
     </div>
   );
 }
+
