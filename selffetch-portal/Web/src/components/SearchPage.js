@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useRef, useEffect, use } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 // Contexts
 import { useFavorites } from '../FavoriteContext';
 import { useTheme } from '../ThemeContext';
@@ -27,6 +27,7 @@ import { get_persisted_bool, set_persisted_bool } from '../utils/persistedState'
 * Debounced autocomplete: uses useDebounce to limit API calls for autosuggestions.
 */
 export default function SearchPage() {
+  const location = useLocation();
   const { theme, toggleTheme } = useTheme();
   const {
     includeTags,
@@ -116,11 +117,47 @@ export default function SearchPage() {
    * Compares by id if present, otherwise by value.
    */
   function is_tag_used(tag, includes, excludes) {
+    console.log('Includes:', includes);
+    console.log('Excludes:', excludes);
+    console.log('is_tag_used check for tag:', tag);
     if (!tag) return false;
     const tag_id = tag.id ?? null;
     const tag_value = tag.value ?? null;
     const check = t => (tag_id ? t.id === tag_id : t.value === tag_value);
     return (includes || []).some(check) || (excludes || []).some(check);
+  }
+
+    /**
+   * is_tag_used_2
+   * Determine if a given tag is currently present in includeTags or excludeTags.
+   * Compares by value.
+   * Mechanism using binary search for large lists since data already sorted. 
+   */
+  function is_tag_used_2(fav_tags, used_tags) {
+    console.log('Favorites:', fav_tags);
+    console.log('Used Tags:', used_tags);
+    if (!fav_tags || fav_tags.length === 0) return [];
+    if (!used_tags || used_tags.length === 0) return [];
+    // Perform binary search for large lists
+    const used_values = used_tags.map(t => t.value).sort();
+    const found = [];
+    for (const fav of fav_tags) {
+      const fav_value = fav.value;
+      let left = 0;
+      let right = used_values.length - 1;
+      while (left <= right) {
+        const mid = Math.floor((left + right) / 2);
+        if (used_values[mid] === fav_value) {
+          found.push(fav);
+          break;
+        } else if (used_values[mid] < fav_value) {
+          left = mid + 1;
+        } else {
+          right = mid - 1;
+        }
+      }
+    }
+    return found;
   }
 
   /**
@@ -149,10 +186,57 @@ export default function SearchPage() {
     set_persisted_bool(FAVORITES_HIDE_USED_KEY, next);
   }
 
+  function short_filter(includes, excludes) {
+    // combine include and exclude lists
+    const combined = [...(includes || []), ...(excludes || [])];
+    // short by alphabetical value for consistency
+    combined.sort((a, b) => a.value.localeCompare(b.value));
+    return combined.map(t => t.value).join(',');
+  }
+  const [usedFilters, setUsedFilters] = useState('');
+
+  useEffect(() => {
+    setUsedFilters(short_filter(includeTags, excludeTags));
+  }, [includeTags, excludeTags]);
+
+  useEffect(() => {
+    // Parse query parameters from URL
+    const params = new URLSearchParams(location.search);
+    const includeParam = params.get('include');
+    if (includeParam) {
+      // Set includeTags to contain this tag (if not already included)
+      setIncludeTags([{ id: null, value: includeParam }]);
+      // Reset other related state if needed, like offset
+    }
+  }, [location.search, setIncludeTags]);
+  // useEffect(() => {
+  //   if (usedFilters && favoriteTags.length > 0) {
+  //     // console.log('Used filters changed, updating shown favorites');
+  //     // exclude used tags from shown_favorites
+      
+  //   }
+  // }, [usedFilters, favoriteTags]);
+
+
+
   // Derive shown_favorites based on favorites_hide_used and include/exclude lists
-  const shown_favorites = favorites_hide_used
-    ? favoriteTags.filter(t => !is_tag_used(t, includeTags, excludeTags))
-    : favoriteTags;
+  // const shown_favorites = favorites_hide_used
+  //   ? favoriteTags.filter(t => !is_tag_used(t, includeTags, excludeTags))
+  //   : favoriteTags;
+  const [shown_favorites, set_shown_favorites] = useState([]);
+  useEffect(() => {
+    if (favorites_hide_used) {
+      // const filtered = favoriteTags.filter(t => !is_tag_used_2(favoriteTags, usedFilters).includes(t));
+      const used_tags = [...includeTags, ...excludeTags];
+      const filtered = favoriteTags.filter(t => !is_tag_used_2(favoriteTags, used_tags).includes(t));
+      set_shown_favorites(filtered);
+      console.log('Updating shown favorites with hide used ON');
+    } else {
+      set_shown_favorites(favoriteTags);
+      console.log('Updating shown favorites with hide used OFF');
+    }
+    console.log('Final Data length:', favoriteTags.length);
+  }, [favorites_hide_used, favoriteTags]);
 
   /************** effects **************/
   // Load recent search history once
@@ -227,9 +311,13 @@ export default function SearchPage() {
         const signature = build_signature(includeTags, excludeTags, favorite_only);
         if (signature !== last_saved_signature_ref.current) {
           last_saved_signature_ref.current = signature;
+            const mappedIncludeTags = (includeTags ?? []).filter(t => t != null).map(t => [t.value, t.id]);
+            const mappedExcludeTags = (excludeTags ?? []).filter(t => t != null).map(t => [t.value, t.id]);
           saveSearchHistory(
-            includeTags.map(t => t.value),
-            excludeTags.map(t => t.value),
+            // includeTags.map(t => [t.value, t.id]),
+            // if null then [[]] to avoid issues
+            mappedIncludeTags.length > 0 ? mappedIncludeTags : [[]],
+            mappedExcludeTags.length > 0 ? mappedExcludeTags : [[]],
             favorite_only,
             user_id
           ).catch(err => console.warn('Failed saving search history', err));
@@ -454,20 +542,27 @@ export default function SearchPage() {
             {search_history.length === 0 ? (
               <div className="text-xs text-gray-400">No recent searches</div>
             ) : (
+              
               search_history.map(h => (
                 <button key={h.id}
                   className="w-full text-left px-2 py-1 hover:bg-gray-100 rounded text-sm"
                   onClick={() => {
-                    setIncludeTags((h.include_tags || []).map(v => ({ id: null, value: v })));
-                    setExcludeTags((h.exclude_tags || []).map(v => ({ id: null, value: v })));
+                    setIncludeTags((h.include_tags || []).map(t => ({ id: t[1], value: t[0] })));
+                    setExcludeTags((h.exclude_tags || []).map(t => ({ id: t[1], value: t[0] })));
                     set_favorite_only(!!h.favorite_only);
                     setOffset(0);
                   }}
                 >
                   <div className="flex justify-between">
                     <div className="truncate">
-                      <span className="text-xs text-gray-600">IN:</span> {(h.include_tags||[]).join(', ')}{' '}
-                      <span className="ml-1 text-xs text-gray-600">EX:</span> {(h.exclude_tags||[]).join(', ')}
+                      {/* <span className="text-xs text-gray-600">IN:</span> {(h.include_tags||[]).join(', ')}{' '} */}
+                      <span className="ml-1 text-xs text-gray-600">IN:</span> {(h.include_tags||[]).map(t => t[0]).join(', ')}
+                    </div>
+                    {
+                      console.log('Rendering history item:', h)
+                    }
+                    <div className="truncate">
+                      <span className="ml-1 text-xs text-gray-600">EX:</span> {(h.exclude_tags||[]).map(t => t[0]).join(', ')}
                     </div>
                   </div>
                   {h.favorite_only && <div className="text-xs text-yellow-700">Favorites only</div>}
