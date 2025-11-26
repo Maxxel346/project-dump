@@ -10,6 +10,34 @@ import { getMediaPreviewUrl } from '../api';
  *  - media: media object from API (id, type, ...)
  *  - on_click: callback to navigate/open detail
  */
+
+/* -----------------------
+   Icons
+   ----------------------- */
+/** Accessible heart icon (SVG) */
+function HeartIcon({ filled = false, class_name = "", title = "" }) {
+  // Inline small accessible SVG
+  return (
+    <svg
+      className={class_name}
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      aria-hidden={title ? "false" : "true"}
+      role={title ? "img" : "presentation"}
+    >
+      {title ? <title>{title}</title> : null}
+      <path
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.2"
+        d="M12.1 21s-7.2-4.6-9.1-7.3C-1.2 8.4 5.2 3 8.8 5.3 10.5 6.5 12 8.6 12 8.6s1.6-2.1 3.2-3.3C18.8 3 25.2 8.4 21 13.7c-1.9 2.7-9.9 7.3-9.9 7.3z"
+      />
+    </svg>
+  );
+}
+
+
 export default function MediaCard({ media, on_click }) {
   const { favoriteMediaIds, favoriteMedia, unfavoriteMedia } = useFavorites();
   const [img_error, set_img_error] = useState(false);
@@ -68,14 +96,16 @@ export default function MediaCard({ media, on_click }) {
         )}
 
         <button
-          className="absolute top-2 left-2 bg-white rounded-full p-1 shadow hover:bg-red-100 z-10 dark:bg-gray-800 dark:hover:bg-red-700"
+          className="absolute top-2 left-2 bg-white rounded-full flex items-center justify-center w-11 h-11 shadow hover:bg-red-100 z-30 dark:bg-gray-800 dark:hover:bg-red-700"
           onClick={e => {
-            e.stopPropagation();
+            e.preventDefault();  // THIS prevents navigation from <a>
+            e.stopPropagation(); // prevent bubbling up to other handlers
             is_favorite ? unfavoriteMedia(media.id) : favoriteMedia(media.id);
           }}
           aria-label={is_favorite ? 'Remove from favorites' : 'Add to favorites'}
+          type="button"
         >
-          <span className={is_favorite ? 'text-red-500 text-lg' : 'text-gray-400 text-lg'}>♥</span>
+          <HeartIcon filled={is_favorite} class_name={is_favorite ? "text-red-500" : "text-gray-400"} title={is_favorite ? "Favorited" : "Add to favorites"} />
         </button>
       </a>
     </div>
