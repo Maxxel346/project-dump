@@ -29,6 +29,12 @@ import { get_persisted_bool, set_persisted_bool } from '../utils/persistedState'
 export default function SearchPage() {
   const location = useLocation();
   const { theme, toggleTheme } = useTheme();
+  useEffect(() => {
+    const link = document.querySelector("link[rel~='icon']");
+    if (link) link.href = "/icons/home.png"; 
+  }, []);
+  const [showRecent, setShowRecent] = useState(false);
+
   const {
     includeTags,
     setIncludeTags,
@@ -531,12 +537,28 @@ export default function SearchPage() {
         <div className="mt-4">
           <div className="flex items-center justify-between">
             <span className="font-semibold">Recent searches</span>
-            <button className="text-xs text-blue-500" onClick={async () => {
-              try {
-                const hist = await getSearchHistory(50, user_id);
-                set_search_history(hist);
-              } catch(e) { console.warn(e) }
-            }}>Refresh</button>
+
+            <div className="flex items-center gap-2">
+              <button
+                className="text-xs text-blue-500"
+                onClick={async () => {
+                  try {
+                    const hist = await getSearchHistory(50, user_id);
+                    set_search_history(hist);
+                  } catch (e) { console.warn(e) }
+                }}
+              >
+                Refresh
+              </button>
+
+              {/* ▼ Toggle Button */}
+              <button
+                className="text-xs text-gray-600"
+                onClick={() => setShowRecent(prev => !prev)}
+              >
+                {showRecent ? "Hide ▲" : "Show ▼"}
+              </button>
+            </div>
           </div>
           <div className="mt-2 max-h-40 overflow-auto">
             {search_history.length === 0 ? (
@@ -564,13 +586,16 @@ export default function SearchPage() {
                     <div className="truncate">
                       <span className="ml-1 text-xs text-gray-600">EX:</span> {(h.exclude_tags||[]).map(t => t[0]).join(', ')}
                     </div>
-                  </div>
-                  {h.favorite_only && <div className="text-xs text-yellow-700">Favorites only</div>}
-                </button>
-              ))
-            )}
-          </div>
+                    {h.favorite_only && (
+                      <div className="text-xs text-yellow-700">Favorites only</div>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
         </div>
+
       </div>
 
       {/* Floating buttons */}
